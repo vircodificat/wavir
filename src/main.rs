@@ -9,7 +9,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 
-use crate::canvas::Renderer;
+use crate::canvas::{Render, Renderer, SvgRenderer};
 use crate::state::{Signal, SignalType, State};
 use crate::style::Style;
 
@@ -25,6 +25,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let style = Style::load("style.json")?;
     println!("style: {style:?}");
     println!("lane_height = {}", style.lane_height());
+
+    // Headless screenshot mode: render one frame to an SVG file and exit,
+    // without opening a window. Usage: waivir --svg [output.svg]
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--svg") {
+        let path = args.get(i + 1).map(String::as_str).unwrap_or("frame.svg");
+        let state = State::sample();
+        let mut renderer = SvgRenderer::new(path, 1920, 1080);
+        draw_frame(&mut renderer, &style, &Mutex::new(state))?;
+        renderer.present()?;
+        println!("wrote {path}");
+        return Ok(());
+    }
 
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
@@ -72,14 +85,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         draw_frame(&mut renderer, &style, &state)?;
 
-        canvas::Renderer::present(&mut renderer);
+        renderer.present()?;
         timer.delay(16); // ~60 FPS cap
     }
 
     Ok(())
 }
 
-fn draw_frame(r: &mut Renderer, style: &Style, state: &Mutex<State>) -> Result<(), String> {
+fn draw_frame(r: &mut impl Render, style: &Style, state: &Mutex<State>) -> Result<(), String> {
     r.set_draw_color(Color::RGB(24, 24, 32));
     r.clear();
 
@@ -111,7 +124,7 @@ fn draw_frame(r: &mut Renderer, style: &Style, state: &Mutex<State>) -> Result<(
 /// every multiple of `jump_interval_ps` in the viewport, extending from the
 /// top of the screen down by `time_ruler_tick_height`.
 fn draw_time_ruler(
-    r: &mut Renderer,
+    r: &mut impl Render,
     style: &Style,
     state: &State,
     scale: f32,
@@ -149,7 +162,7 @@ fn time_to_x(t_ps: u64, state: &State, style: &Style, viewport_w: f32) -> f32 {
 }
 
 fn draw_lane(
-    r: &mut Renderer,
+    r: &mut impl Render,
     style: &Style,
     state: &State,
     signal: &Signal,
@@ -279,7 +292,7 @@ fn draw_lane(
 /// in between, `label_inset` left-padded from the segment's left edge
 /// (only if the label fits within the segment).
 fn draw_bus_segment(
-    r: &mut Renderer,
+    r: &mut impl Render,
     style: &Style,
     value: u64,
     x_a: f32,

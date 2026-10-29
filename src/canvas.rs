@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ab_glyph::{Font as _, FontArc, Glyph, GlyphId, Point as FPoint, PxScale, ScaleFont};
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -7,56 +7,31 @@ use sdl2::render::{BlendMode, Canvas, TextureCreator};
 use sdl2::surface::Surface;
 use sdl2::video::{Window, WindowContext};
 
-/// High-level 2D renderer wrapping the SDL2 canvas.
-pub struct Renderer {
-    pub canvas: Canvas<Window>,
-    texture_creator: TextureCreator<WindowContext>,
-    font: FontArc,
-}
+/// Backend-agnostic drawing interface.
+///
+/// [`Renderer`] draws onto an SDL2 window; [`SvgRenderer`] records the same
+/// calls into an SVG document, so frames can be captured to a file without
+/// opening a window.
+pub trait Render {
+    /// Set the color used by subsequent `line`/`dashed_line` calls (and,
+    /// for `clear`, the background).
+    fn set_draw_color(&mut self, color: Color);
 
-impl Renderer {
-    pub fn new(window: Window, font_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let canvas = window
-            .into_canvas()
-            .accelerated()
-            .present_vsync()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let texture_creator = canvas.texture_creator();
-        let font = FontArc::try_from_vec(std::fs::read(font_path)?)?;
-        Ok(Self {
-            canvas,
-            texture_creator,
-            font,
-        })
-    }
+    /// Fill the whole output area with the current draw color.
+    fn clear(&mut self);
 
-    pub fn set_draw_color(&mut self, color: Color) {
-        self.canvas.set_draw_color(color);
-    }
-
-    pub fn clear(&mut self) {
-        self.canvas.clear();
-    }
-
-    pub fn present(&mut self) {
-        self.canvas.present();
-    }
+    /// Flush the frame: swap buffers on-screen, or write the file on disk.
+    fn present(&mut self) -> Result<(), String>;
 
     /// Size of the drawable area in pixels.
-    pub fn output_size(&self) -> Result<(u32, u32), String> {
-        self.canvas.output_size().map_err(|e| e.to_string())
-    }
+    fn output_size(&self) -> Result<(u32, u32), String>;
 
     /// Draw a straight line from `(x1, y1)` to `(x2, y2)`.
-    pub fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
-        self.canvas
-            .draw_line(Point::new(x1, y1), Point::new(x2, y2))
-    }
+    fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String>;
 
     /// Draw a dashed line from `(x1, y1)` to `(x2, y2)`:
     /// `dash` pixels on, `gap` pixels off, along the whole segment.
-    pub fn dashed_line(
+    fn dashed_line(
         &mut self,
         x1: i32,
         y1: i32,
@@ -88,15 +63,74 @@ impl Renderer {
     }
 
     /// Measure `text`; returns its size in pixels at the given font size.
-    pub fn text_size(&self, text: &str, px_size: f32) -> (u32, u32) {
+    fn text_size(&self, text: &str, px_size: f32) -> (u32, u32);
+
+    /// Draw `text` with its bounding box top-left at `(x, y)`.
+    /// Returns the drawn text size in pixels.
+    fn text(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        px_size: f32,
+        color: Color,
+    ) -> Result<(u32, u32), String>;
+}
+
+/// High-level SDL2 window renderer.
+pub struct Renderer {
+    pub canvas: Canvas<Window>,
+    texture_creator: TextureCreator<WindowContext>,
+    font: FontArc,
+}
+
+impl Renderer {
+    pub fn new(window: Window, font_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let canvas = window
+            .into_canvas()
+            .accelerated()
+            .present_vsync()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let texture_creator = canvas.texture_creator();
+        let font = FontArc::try_from_vec(std::fs::read(font_path)?)?;
+        Ok(Self {
+            canvas,
+            texture_creator,
+            font,
+        })
+    }
+}
+
+impl Render for Renderer {
+    fn set_draw_color(&mut self, color: Color) {
+        self.canvas.set_draw_color(color);
+    }
+
+    fn clear(&mut self) {
+        self.canvas.clear();
+    }
+
+    fn present(&mut self) -> Result<(), String> {
+        self.canvas.present();
+        Ok(())
+    }
+
+    fn output_size(&self) -> Result<(u32, u32), String> {
+        self.canvas.output_size().map_err(|e| e.to_string())
+    }
+
+    fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
+        self.canvas
+            .draw_line(Point::new(x1, y1), Point::new(x2, y2))
+    }
+
+    fn text_size(&self, text: &str, px_size: f32) -> (u32, u32) {
         let (width, height, _) = rasterize_text(&self.font, text, px_size);
         (width, height)
     }
 
-    /// Draw `text` with its bounding box top-left at `(x, y)`.
-    /// RGB is taken from `color`; the glyph coverage supplies the alpha.
-    /// Returns the drawn text size in pixels.
-    pub fn text(
+    fn text(
         &mut self,
         text: &str,
         x: i32,
@@ -119,6 +153,119 @@ impl Renderer {
         self.canvas.copy(&texture, None, Some(dest))?;
         Ok((width, height))
     }
+}
+
+/// Records draw calls into an SVG document, written to `path` on `present`.
+///
+/// Meant for capturing screenshots headlessly (see the `--svg` flag in
+/// `main.rs`); geometry matches the SDL renderer up to rounding, and text
+/// uses a monospace font with an approximate advance width.
+pub struct SvgRenderer {
+    path: PathBuf,
+    width: u32,
+    height: u32,
+    color: Color,
+    background: Color,
+    body: Vec<String>,
+}
+
+impl SvgRenderer {
+    pub fn new(path: impl Into<PathBuf>, width: u32, height: u32) -> Self {
+        Self {
+            path: path.into(),
+            width,
+            height,
+            color: Color::RGB(0, 0, 0),
+            background: Color::RGB(0, 0, 0),
+            body: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, element: String) {
+        self.body.push(element);
+    }
+}
+
+impl Render for SvgRenderer {
+    fn set_draw_color(&mut self, color: Color) {
+        self.color = color;
+    }
+
+    fn clear(&mut self) {
+        self.background = self.color;
+    }
+
+    fn present(&mut self) -> Result<(), String> {
+        let mut svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
+            self.width, self.height, self.width, self.height
+        );
+        svg.push_str(&format!(
+            "<rect width=\"{}\" height=\"{}\" fill=\"{}\"/>\n",
+            self.width,
+            self.height,
+            rgb_hex(self.background)
+        ));
+        for element in &self.body {
+            svg.push_str(element);
+            svg.push('\n');
+        }
+        svg.push_str("</svg>\n");
+        std::fs::write(&self.path, svg).map_err(|e| e.to_string())
+    }
+
+    fn output_size(&self) -> Result<(u32, u32), String> {
+        Ok((self.width, self.height))
+    }
+
+    fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
+        self.push(format!(
+            "<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" stroke=\"{}\" stroke-width=\"1\"/>",
+            rgb_hex(self.color)
+        ));
+        Ok(())
+    }
+
+    fn text_size(&self, text: &str, px_size: f32) -> (u32, u32) {
+        // DejaVuSansMono (the font used by `Renderer`) has an advance of
+        // roughly 0.6em; approximate for measurement purposes.
+        let width = (px_size * 0.6 * text.chars().count() as f32).round() as u32;
+        (width.max(1), (px_size as u32).max(1))
+    }
+
+    fn text(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        px_size: f32,
+        color: Color,
+    ) -> Result<(u32, u32), String> {
+        // SVG positions text by its baseline; approximate it from the top of
+        // the bounding box the way `Renderer` lays text out.
+        let baseline = y as f32 + px_size * 0.8;
+        self.push(format!(
+            "<text x=\"{x}\" y=\"{}\" font-family=\"monospace\" font-size=\"{}\" fill=\"{}\">{}</text>",
+            baseline,
+            px_size,
+            rgb_hex(color),
+            escape_xml(text)
+        ));
+        let (width, height) = self.text_size(text, px_size);
+        Ok((width, height))
+    }
+}
+
+/// Format an RGB color as `#rrggbb`.
+fn rgb_hex(c: Color) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
+}
+
+/// Escape the characters that are special in XML text content.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Rasterize `text` at the given pixel size into an RGBA8 buffer
