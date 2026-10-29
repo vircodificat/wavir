@@ -1,0 +1,17 @@
+{
+    "rail": 10,
+    "signal_zone": 80,
+    "gap": 25,
+
+    "name_width": 400,
+    "label_inset": 10,
+    "label_fontsize": 20,
+
+    "time_ruler_height": 20,
+    "time_ruler_tick_height": 5,
+
+    "signal_viewport_height": 1000,
+    "viewport_border": 10,
+
+    "now_cursor_color": "#ffff00"
+}
