@@ -10,7 +10,12 @@ pub struct State {
     pub end_ps: u64,
     /// Interval (in picoseconds) by which the viewport jumps.
     pub jump_interval_ps: u64,
+
     pub signals: Vec<Signal>,
+
+    /// Index of the currently selected signal, if any. `None` means there
+    /// are no signals or the selection is deselected.
+    pub selected_signal: Option<usize>,
 }
 
 /// A signal value: raw 64-bit payload.
@@ -42,6 +47,20 @@ pub struct Signal {
 }
 
 impl State {
+    /// Time of the last event of the given signal strictly before
+    /// `now_ps`, or `None` if there is none.
+    pub fn prev_event_ps(&self, signal_idx: usize, now_ps: u64) -> Option<u64> {
+        let events = &self.signals.get(signal_idx)?.events;
+        events.iter().rev().map(|e| e.time_ps).find(|t| *t < now_ps)
+    }
+
+    /// Time of the first event of the given signal strictly after
+    /// `now_ps`, or `None` if there is none.
+    pub fn next_event_ps(&self, signal_idx: usize, now_ps: u64) -> Option<u64> {
+        let events = &self.signals.get(signal_idx)?.events;
+        events.iter().map(|e| e.time_ps).find(|t| *t > now_ps)
+    }
+
     /// Hardcoded sample state.
     pub fn sample() -> Self {
         let ev = |time_ps: u64, v: u64| SignalEvent {
@@ -68,6 +87,7 @@ impl State {
             end_ps: 1000,
             // The clock's period.
             jump_interval_ps: 2 * half_period,
+            selected_signal: None,
             signals: vec![
                 Signal {
                     name: "clock".into(),

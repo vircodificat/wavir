@@ -70,6 +70,9 @@ pub trait Render {
         Ok(())
     }
 
+    /// Fill a rectangle with the current draw color.
+    fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<(), String>;
+
     /// Measure `text`; returns its size in pixels at the given font size.
     fn text_size(&self, text: &str, px_size: f32) -> (u32, u32);
 
@@ -131,6 +134,13 @@ impl Render for Renderer {
     fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
         self.canvas
             .draw_line(Point::new(x1, y1), Point::new(x2, y2))
+    }
+
+    fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<(), String> {
+        self.canvas
+            .fill_rect(Rect::new(x, y, w, h))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     fn text_size(&self, text: &str, px_size: f32) -> (u32, u32) {
@@ -229,6 +239,14 @@ impl Render for SvgRenderer {
     fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
         self.push(format!(
             "<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" stroke=\"{}\" stroke-width=\"1\"/>",
+            rgb_hex(self.color)
+        ));
+        Ok(())
+    }
+
+    fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<(), String> {
+        self.push(format!(
+            "<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"{}\"/>",
             rgb_hex(self.color)
         ));
         Ok(())

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
+use sdl2::keyboard::{Keycode, Mod};
 use sdl2::pixels::Color;
 
 use crate::canvas::{Render, Renderer, SvgRenderer};
@@ -63,7 +63,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } => running = false,
                 // Move the "now" cursor by one jump interval, capped at the
-                // start (0) and the end of the simulation.
+                // With Shift held, jump to the previous/next event of the
+                // selected signal, falling back to 0 / end_ps when there are
+                // no more events in that direction. With no signal selected,
+                // behaves like the unshifted jump.
+                Event::KeyDown {
+                    keycode: Some(Keycode::Left),
+                    keymod,
+                    ..
+                } if keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) => {
+                    let mut state = state.lock().unwrap();
+                    state.now_ps = match state.selected_signal {
+                        Some(sel) => state.prev_event_ps(sel, state.now_ps).unwrap_or(0),
+                        None => state.now_ps.saturating_sub(state.jump_interval_ps),
+                    };
+                }
                 Event::KeyDown {
                     keycode: Some(Keycode::Left),
                     ..
@@ -73,10 +87,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::KeyDown {
                     keycode: Some(Keycode::Right),
+                    keymod,
+                    ..
+                } if keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD) => {
+                    let mut state = state.lock().unwrap();
+                    state.now_ps = match state.selected_signal {
+                        Some(sel) => state
+                            .next_event_ps(sel, state.now_ps)
+                            .unwrap_or(state.end_ps),
+                        None => (state.now_ps + state.jump_interval_ps).min(state.end_ps),
+                    };
+                }
+                Event::KeyDown {
+                    keycode: Some(Keycode::Right),
                     ..
                 } => {
                     let mut state = state.lock().unwrap();
                     state.now_ps = (state.now_ps + state.jump_interval_ps).min(state.end_ps);
+                }
+                // Up/down select the adjacent signal, clamped to the valid
+                // range; `None` means no signal is selected.
+                Event::KeyDown {
+                    keycode: Some(Keycode::Up),
+                    ..
+                } => {
+                    let mut state = state.lock().unwrap();
+                    state.selected_signal = Some(
+                        state
+                            .selected_signal
+                            .map(|i| i.saturating_sub(1))
+                            .unwrap_or(0)
+                            .min(state.signals.len().saturating_sub(1)),
+                    );
+                }
+                Event::KeyDown {
+                    keycode: Some(Keycode::Down),
+                    ..
+                } => {
+                    let mut state = state.lock().unwrap();
+                    state.selected_signal = Some(
+                        state
+                            .selected_signal
+                            .map(|i| (i + 1).min(state.signals.len().saturating_sub(1)))
+                            .unwrap_or(0),
+                    );
                 }
                 _ => {}
             }
@@ -117,7 +171,18 @@ fn draw_frame(r: &mut impl Render, style: &Style, state: &Mutex<State>) -> Resul
     draw_time_ruler(r, style, &state, scale, viewport_w, border)?;
 
     for (i, signal) in state.signals.iter().enumerate() {
-        draw_lane(r, style, &state, signal, i, scale, viewport_w, border)?;
+        let selected = state.selected_signal == Some(i);
+        draw_lane(
+            r,
+            style,
+            &state,
+            signal,
+            i,
+            selected,
+            scale,
+            viewport_w,
+            border,
+        )?;
     }
 
     // "Now" cursor: a vertical line spanning the viewport at the current
@@ -180,6 +245,7 @@ fn draw_lane(
     state: &State,
     signal: &Signal,
     i: usize,
+    selected: bool,
     scale: f32,
     viewport_w: f32,
     border: f32,
@@ -200,6 +266,19 @@ fn draw_lane(
     let x_v = border + style.name_width as f32;
     let x_left = border;
     let x_right = viewport_w - border;
+
+    // Selected lane: fill its background (name area + waveform zone) with
+    // the selection color, before drawing the frame and waveform.
+    if selected {
+        let sc = style.select_signal_color;
+        r.set_draw_color(Color::RGB(sc[0], sc[1], sc[2]));
+        r.fill_rect(
+            sx(x_left),
+            sy(y_top as f32),
+            (sx(x_right) - sx(x_left)).max(0) as u32,
+            (sy((y_top + lane_height) as f32) - sy(y_top as f32)).max(0) as u32,
+        )?;
+    }
 
     // Lane frame.
     r.set_draw_color(LANE_COLOR);

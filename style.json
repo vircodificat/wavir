@@ -15,5 +15,6 @@
     "viewport_border_color": "#404050",
 
     "now_cursor_color": "#ffff00",
-    "signal_color": "#50c878"
+    "signal_color": "#50c878",
+    "select_signal_color": "#1c4a2c"
 }

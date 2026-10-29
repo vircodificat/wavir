@@ -30,6 +30,11 @@ pub struct Style {
     #[serde(deserialize_with = "deserialize_hex_color")]
     pub signal_color: [u8; 3],
 
+    /// Background color for the selected signal's lane, as a `#rrggbb` hex
+    /// string.
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub select_signal_color: [u8; 3],
+
     /// Height of the signal viewport, in virtual pixels.
     pub signal_viewport_height: u32,
 
