@@ -18,7 +18,6 @@ const FONT_PATH: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
 const DASH_LEN: u32 = 12;
 const DASH_GAP: u32 = 8;
 const LANE_COLOR: Color = Color::RGB(180, 180, 190);
-const WAVE_COLOR: Color = Color::RGB(80, 200, 255);
 const TEXT_COLOR: Color = Color::RGB(230, 230, 235);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -98,24 +97,35 @@ fn draw_frame(r: &mut impl Render, style: &Style, state: &Mutex<State>) -> Resul
 
     let state = state.lock().unwrap();
 
-    // Virtual-pixel scale: the viewport spans the screen vertically, and its
-    // width follows from the screen's aspect ratio.
+    // Virtual-pixel scale: the viewport is inset by a uniform
+    // `viewport_border` margin on all four sides and spans the remaining
+    // height; its width follows from the screen's aspect ratio.
     let (screen_w, screen_h) = r.output_size()?;
-    let scale = screen_h as f32 / style.signal_viewport_height as f32;
+    let border = style.viewport_border as f32;
+    let scale = screen_h as f32 / (style.signal_viewport_height as f32 + 2.0 * border);
     let viewport_w = screen_w as f32 / scale;
 
-    draw_time_ruler(r, style, &state, scale, viewport_w)?;
+    let border_px = (border * scale).round() as i32;
+
+    // Border rectangle, inset `viewport_border` from all four screen edges.
+    let bc = style.viewport_border_color;
+    r.set_draw_color(Color::RGB(bc[0], bc[1], bc[2]));
+    let w = screen_w as i32 - 2 * border_px;
+    let h = screen_h as i32 - 2 * border_px;
+    r.rect(border_px, border_px, w, h)?;
+
+    draw_time_ruler(r, style, &state, scale, viewport_w, border)?;
 
     for (i, signal) in state.signals.iter().enumerate() {
-        draw_lane(r, style, &state, signal, i, scale, viewport_w)?;
+        draw_lane(r, style, &state, signal, i, scale, viewport_w, border)?;
     }
 
-    // "Now" cursor: a vertical line spanning the whole screen at the
-    // current simulation time, drawn on top of the lanes.
-    let x_now = (time_to_x(state.now_ps, &state, style, viewport_w) * scale).round() as i32;
+    // "Now" cursor: a vertical line spanning the viewport at the current
+    // simulation time, drawn on top of the lanes and border.
+    let x_now = (time_to_x(state.now_ps, &state, style, viewport_w, border) * scale).round() as i32;
     let c = style.now_cursor_color;
     r.set_draw_color(Color::RGB(c[0], c[1], c[2]));
-    r.line(x_now, 0, x_now, screen_h as i32)?;
+    r.line(x_now, border_px, x_now, screen_h as i32 - border_px)?;
 
     Ok(())
 }
@@ -129,8 +139,9 @@ fn draw_time_ruler(
     state: &State,
     scale: f32,
     viewport_w: f32,
+    border: f32,
 ) -> Result<(), String> {
-    let sy = |v: f32| (v * scale).round() as i32;
+    let sy = |v: f32| ((border + v) * scale).round() as i32;
     let tick_bottom = sy(style.time_ruler_tick_height as f32);
 
     // First tick at or after the start of the viewport, then every
@@ -142,8 +153,8 @@ fn draw_time_ruler(
     r.set_draw_color(LANE_COLOR);
     let mut t_ps = first_tick;
     while t_ps <= state.viewport_end_ps {
-        let x = (time_to_x(t_ps, state, style, viewport_w) * scale).round() as i32;
-        r.line(x, 0, x, tick_bottom)?;
+        let x = (time_to_x(t_ps, state, style, viewport_w, border) * scale).round() as i32;
+        r.line(x, sy(0.0), x, tick_bottom)?;
         t_ps += state.jump_interval_ps;
     }
 
@@ -151,14 +162,16 @@ fn draw_time_ruler(
 }
 
 /// Interpolate a timestamp to an x position, in virtual pixels:
-/// `viewport_start_ps` maps to `name_width`, `viewport_end_ps` maps to the
-/// viewport width (the right edge of the screen).
-fn time_to_x(t_ps: u64, state: &State, style: &Style, viewport_w: f32) -> f32 {
-    let x_v = style.name_width as f32;
+/// `viewport_start_ps` maps to the left edge of the waveform area
+/// (`border + name_width`), `viewport_end_ps` maps to the right margin edge
+/// (`viewport_w - border`).
+fn time_to_x(t_ps: u64, state: &State, style: &Style, viewport_w: f32, border: f32) -> f32 {
+    let x_left = border + style.name_width as f32;
+    let x_right = viewport_w - border;
     let t_start = state.viewport_start_ps as f32;
     let t_end = state.viewport_end_ps as f32;
     let frac = ((t_ps as f32 - t_start) / (t_end - t_start)).clamp(0.0, 1.0);
-    x_v + frac * (viewport_w - x_v)
+    x_left + frac * (x_right - x_left)
 }
 
 fn draw_lane(
@@ -169,6 +182,7 @@ fn draw_lane(
     i: usize,
     scale: f32,
     viewport_w: f32,
+    border: f32,
 ) -> Result<(), String> {
     let lane_height = style.lane_height();
     // Everything is shifted down by the time ruler's height to make space
@@ -176,13 +190,16 @@ fn draw_lane(
     let y_top = style.time_ruler_height + (i as u32) * (lane_height + style.gap);
     let y_bottom = style.time_ruler_height + (i + 1) as u32 * (lane_height + style.gap) - style.gap;
 
-    // Virtual pixels -> screen pixels.
-    let sy = |v: f32| (v * scale).round() as i32;
+    // Virtual pixels -> screen pixels. Y coordinates are shifted down by the
+    // border; X coordinates are passed in border-inclusive (see `time_to_x`).
+    let sy = |v: f32| ((border + v) * scale).round() as i32;
     let sx = |v: f32| (v * scale).round() as i32;
     let dash_len = (DASH_LEN as f32 * scale).round().max(1.0) as u32;
     let dash_gap = (DASH_GAP as f32 * scale).round().max(1.0) as u32;
 
-    let x_v = style.name_width as f32;
+    let x_v = border + style.name_width as f32;
+    let x_left = border;
+    let x_right = viewport_w - border;
 
     // Lane frame.
     r.set_draw_color(LANE_COLOR);
@@ -194,11 +211,18 @@ fn draw_lane(
         dash_len,
         dash_gap,
     )?;
-    r.dashed_line(0, sy(y_top as f32), sx(viewport_w), sy(y_top as f32), dash_len, dash_gap)?;
     r.dashed_line(
-        0,
+        sx(x_left),
+        sy(y_top as f32),
+        sx(x_right),
+        sy(y_top as f32),
+        dash_len,
+        dash_gap,
+    )?;
+    r.dashed_line(
+        sx(x_left),
         sy(y_bottom as f32),
-        sx(viewport_w),
+        sx(x_right),
         sy(y_bottom as f32),
         dash_len,
         dash_gap,
@@ -209,11 +233,12 @@ fn draw_lane(
     let font_px = style.label_fontsize as f32 * scale;
     let (tw, th) = r.text_size(&signal.name, font_px);
     let inset_px = (style.label_inset as f32 * scale).round() as i32;
+    let label_x = sx(border) + inset_px;
     let lane_mid = y_top as f32 + lane_height as f32 / 2.0;
-    if inset_px + tw as i32 <= sx(x_v) {
+    if label_x + tw as i32 <= sx(x_v) {
         r.text(
             &signal.name,
-            inset_px,
+            label_x,
             sy(lane_mid) - th as i32 / 2,
             font_px,
             TEXT_COLOR,
@@ -226,10 +251,11 @@ fn draw_lane(
     let lo = (y_top + lane_height - style.rail) as f32;
 
     // Time -> x mapping, shared with the "now" cursor: t = viewport_start_ps
-    // -> x = name_width, t = viewport_end_ps -> x = viewport width.
-    let x_of = |t_ps: u64| time_to_x(t_ps, state, style, viewport_w);
+    // -> x = border + name_width, t = viewport_end_ps -> x = right margin edge.
+    let x_of = |t_ps: u64| time_to_x(t_ps, state, style, viewport_w, border);
 
-    r.set_draw_color(WAVE_COLOR);
+    let sc = style.signal_color;
+    r.set_draw_color(Color::RGB(sc[0], sc[1], sc[2]));
 
     match signal.signal_type {
         SignalType::Bit => {
@@ -256,9 +282,9 @@ fn draw_lane(
                 last_x = x;
             }
 
-            // Extend the final level to the right edge.
+            // Extend the final level to the right margin edge.
             if let Some(py) = cur_y {
-                r.line(sx(last_x), sy(py), sx(viewport_w), sy(py))?;
+                r.line(sx(last_x), sy(py), sx(x_right), sy(py))?;
             }
         }
         SignalType::Value => {
@@ -270,7 +296,7 @@ fn draw_lane(
                 let v = ev.new_value.0;
 
                 if let Some(pv) = seg_val {
-                    draw_bus_segment(r, style, pv, seg_start, x, scale, hi, lo)?;
+                    draw_bus_segment(r, style, pv, seg_start, x, scale, border, hi, lo)?;
                     // Transition tick spanning the full bus height.
                     r.line(sx(x), sy(hi), sx(x), sy(lo))?;
                 }
@@ -280,7 +306,7 @@ fn draw_lane(
             }
 
             if let Some(pv) = seg_val {
-                draw_bus_segment(r, style, pv, seg_start, viewport_w, scale, hi, lo)?;
+                draw_bus_segment(r, style, pv, seg_start, x_right, scale, border, hi, lo)?;
             }
         }
     }
@@ -298,11 +324,14 @@ fn draw_bus_segment(
     x_a: f32,
     x_b: f32,
     scale: f32,
+    border: f32,
     hi: f32,
     lo: f32,
 ) -> Result<(), String> {
     let sx = |v: f32| (v * scale).round() as i32;
-    let sy = |v: f32| (v * scale).round() as i32;
+    // Y coordinates are lane-virtual pixels, shifted down by the border like
+    // everything else.
+    let sy = |v: f32| ((border + v) * scale).round() as i32;
     let mid = (hi + lo) / 2.0;
 
     let (xa, xb) = (sx(x_a), sx(x_b));

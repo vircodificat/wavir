@@ -26,8 +26,20 @@ pub struct Style {
     #[serde(deserialize_with = "deserialize_hex_color")]
     pub now_cursor_color: [u8; 3],
 
+    /// Color of the waveform lines and bus rails, as a `#rrggbb` hex string.
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub signal_color: [u8; 3],
+
     /// Height of the signal viewport, in virtual pixels.
     pub signal_viewport_height: u32,
+
+    /// Uniform margin around the viewport on all four sides, in virtual
+    /// pixels. The viewport is inset by this much from the screen edges.
+    pub viewport_border: u32,
+
+    /// Color of the viewport border rectangle, as a `#rrggbb` hex string.
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub viewport_border_color: [u8; 3],
 
     /// Height of the time ruler at the top, in virtual pixels. Lanes are
     /// shifted down by this much to make space for it.

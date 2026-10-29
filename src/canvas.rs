@@ -29,6 +29,14 @@ pub trait Render {
     /// Draw a straight line from `(x1, y1)` to `(x2, y2)`.
     fn line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String>;
 
+    /// Draw a rectangle outline with top-left `(x, y)` and the given size.
+    fn rect(&mut self, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
+        self.line(x, y, x + w, y)?;
+        self.line(x + w, y, x + w, y + h)?;
+        self.line(x + w, y + h, x, y + h)?;
+        self.line(x, y + h, x, y)
+    }
+
     /// Draw a dashed line from `(x1, y1)` to `(x2, y2)`:
     /// `dash` pixels on, `gap` pixels off, along the whole segment.
     fn dashed_line(

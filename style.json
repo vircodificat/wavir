@@ -11,7 +11,9 @@
     "time_ruler_tick_height": 5,
 
     "signal_viewport_height": 1000,
-    "viewport_border": 10,
+    "viewport_border": 20,
+    "viewport_border_color": "#404050",
 
-    "now_cursor_color": "#ffff00"
+    "now_cursor_color": "#ffff00",
+    "signal_color": "#50c878"
 }
